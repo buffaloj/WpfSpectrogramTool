@@ -325,8 +325,12 @@ namespace SpectrogramTool.Wpf
                 values[i] = _complex[i][row].Magnitude / _maxAmplitude;
             }
 
+            var numBuckets = _magnitudeGrid.GetLength(1);
+            var freqStep = (_sampleRate / 2) / numBuckets;
+            var frequency = row * freqStep;
+
             var message = string.Join(",", values.Select(f => $"{f}f"));
-            Debug.WriteLine(message);
+            Debug.WriteLine($"freq:{frequency}, envelope:{message}");
         }
 
         private AudioSamples LoadWavSamples(string filename)
