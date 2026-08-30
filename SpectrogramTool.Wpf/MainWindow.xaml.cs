@@ -1,5 +1,6 @@
 ﻿using MathNet.Numerics;
 using Spectrogram;
+using System;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Drawing;
@@ -11,6 +12,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Xml.Linq;
 using static Spectrogram.SpectrogramProcessor;
 
 namespace SpectrogramTool.Wpf
@@ -25,6 +27,8 @@ namespace SpectrogramTool.Wpf
 
         private string _wavefilePath;
         private string _instrumentConfigPath;
+
+        private static FileSystemWatcher _fileWatcher;
 
         public MainWindow()
         {
@@ -124,10 +128,6 @@ namespace SpectrogramTool.Wpf
 
                         SetInstrument(filePath);
 
-                        //var ext = System.IO.Path.GetExtension(filePath);
-                        //var noteName = System.IO.Path.GetFileNameWithoutExtension(filePath);
-                        //_currentNote = _instrument.Notes.Where(n => n.Name == noteName).FirstOrDefault();
-
                         if (_currentNote != null)
                             _currentNote.Length = _length;
 
@@ -194,6 +194,7 @@ namespace SpectrogramTool.Wpf
                 _instrument = null;
                 _currentNote = null;
                 _instrumentConfigPath = null;
+                _fileWatcher = null;
             }
 
             foreach (string file in configFiles)
@@ -211,12 +212,53 @@ namespace SpectrogramTool.Wpf
                     _instrumentConfigPath = file;
                     _instrument = instrument;
                     _currentNote = note;
+
+                    var configFileDir = System.IO.Path.GetDirectoryName(file);
+                    _fileWatcher = new FileSystemWatcher(configFileDir);
+
+                    _fileWatcher.Filter = System.IO.Path.GetFileName(file);
+                    _fileWatcher.Changed += OnFileChanged;
+                    _fileWatcher.EnableRaisingEvents = true;
+
                     return;
                 }
             }
 
             _instrument = LoadInstrumentConfig(configFiles.First());
             _currentNote = _instrument.Notes.FirstOrDefault(n => n.Name == name);
+        }
+
+        private void OnFileChanged(object sender, FileSystemEventArgs e)
+        {
+            Application.Current.Dispatcher.Invoke(() =>
+            {
+                if (string.IsNullOrWhiteSpace(_instrumentConfigPath))
+                    return;
+
+                _instrument = null;
+                _currentNote = null;
+
+                var name = System.IO.Path.GetFileNameWithoutExtension(_wavefilePath);
+
+                int attempts = 0;
+                while (attempts < 3)
+                {
+                    try
+                    {
+                        _instrument = LoadInstrumentConfig(_instrumentConfigPath);
+                        _currentNote = _instrument.Notes.FirstOrDefault(n => n.Name == name);
+
+                        break; // Success
+                    }
+                    catch (IOException)
+                    {
+                        attempts++;
+                        Thread.Sleep(500); // Wait half a second before retrying
+                    }
+                }
+
+                DisplayNoteLines();
+            });
         }
 
         private static void SaveEnvelopes(IEnumerable<Envelope> envelopes, string filePath)
@@ -517,6 +559,8 @@ namespace SpectrogramTool.Wpf
                     Index = row,
                     Value = frequency
                 });
+
+                _currentNote.Frequencies = _currentNote.Frequencies.OrderBy(f => f.Index).ToList();
             }
         }
 
