@@ -7,6 +7,13 @@
         mc:Ignorable="d"
         Title="MainWindow" Height="450" Width="800"
         AllowDrop="true" Drop="Window_Drop">
+
+    <Window.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Save" 
+                        Executed="SaveCommand_Executed" 
+                        CanExecute="SaveCommand_CanExecute"/>
+    </Window.CommandBindings>
+    
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
@@ -16,17 +23,22 @@
         </Grid.RowDefinitions>
         
         <TextBlock x:Name="message" Text="Drag a WAV file here" HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="20"/>
-        
-        <Image x:Name="myImage" 
-               Grid.Row="0" 
+
+        <Grid Grid.Row="0">
+            <Image x:Name="myImage" 
                Stretch="Fill"
                MouseMove="image_MouseMove" 
-                MouseEnter="image_MouseEnter" 
-                MouseLeave="image_MouseLeave"
+               MouseEnter="image_MouseEnter" 
+               MouseLeave="image_MouseLeave"
                MouseLeftButtonDown="myImage_MouseLeftButtonDown"
+               MouseRightButtonDown="myImage_MouseRightButtonDown"
                RenderOptions.BitmapScalingMode="NearestNeighbor"
                Visibility="Collapsed"/>
 
+            <Canvas x:Name="noteCanvas" Visibility="Collapsed" Background="Transparent" IsHitTestVisible="False" SizeChanged="noteCanvas_SizeChanged"/>
+        </Grid>
+        
+        
         <Canvas  x:Name="canvas" 
                    Margin="0,10,0,0"
                    SizeChanged="canvas_SizeChanged"

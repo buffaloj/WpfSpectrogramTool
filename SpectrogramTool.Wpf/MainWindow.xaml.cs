@@ -1,14 +1,17 @@
 ﻿using MathNet.Numerics;
 using Spectrogram;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Drawing;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using static Spectrogram.SpectrogramProcessor;
 
 namespace SpectrogramTool.Wpf
 {
@@ -17,12 +20,56 @@ namespace SpectrogramTool.Wpf
     /// </summary>
     public partial class MainWindow : System.Windows.Window
     {
+        private Instrument _instrument;
+        private Note _currentNote;
+
+        private string _wavefilePath;
+        private string _instrumentConfigPath;
+
         public MainWindow()
         {
             InitializeComponent();
 
+            //_instrument = LoadInstrumentConfig(_instrumentConfigPath);
+
             //RenderFromByteArray();
             ProcessSin();
+        }
+
+        // Determines if the Save action is allowed to run right now
+        private void SaveCommand_CanExecute(object sender, CanExecuteRoutedEventArgs e)
+        {
+            e.CanExecute = _instrument != null; // Set to false if there is nothing to save
+        }
+
+        // Executes when Ctrl+S is pressed
+        private void SaveCommand_Executed(object sender, ExecutedRoutedEventArgs e)
+        {
+            if (_instrument == null)
+                return;
+
+            var options = new JsonSerializerOptions
+            {
+                WriteIndented = true
+            };
+
+            string jsonString = JsonSerializer.Serialize(_instrument, options);
+            File.WriteAllText(_instrumentConfigPath, jsonString);
+
+            if (_currentNote == null || !_currentNote.Frequencies.Any())
+                return;
+
+            var envelopes = SpectrogramProcessor.ExtractEnvelopes(_magnitudeGrid, _currentNote.Frequencies.Select(f => new Tuple<int, float> (f.Index, f.Value)).ToList(), _currentNote.Length);
+            var root = System.IO.Path.GetDirectoryName(_wavefilePath);
+
+            var filePath = $"{root}\\{_currentNote.Name}.snd";
+            SaveEnvelopes(envelopes, filePath);
+        }
+
+        private Instrument LoadInstrumentConfig(string filePath)
+        {
+            var jsonString = File.ReadAllText(filePath);
+            return JsonSerializer.Deserialize<Instrument>(jsonString) ?? throw new JsonException("Deserialization returned null.");
         }
 
         public void RenderFromByteArray()
@@ -65,19 +112,30 @@ namespace SpectrogramTool.Wpf
 
                 if (files.Length > 0)
                 {
-                    string imagePath = files[0];
+                    string filePath = files[0];
 
-                    // Verify it is an image file
-                    string extension = System.IO.Path.GetExtension(imagePath).ToLower();
-                    string[] allowedExtensions = { ".wav" };
+                    // Verify it is an WAV file
+                    string extension = System.IO.Path.GetExtension(filePath).ToLower();
+                    string[] allowedExtensions = { ".wav", ".aiff" };
 
                     if (Array.Exists(allowedExtensions, ext => ext == extension))
                     {
-                        ProcessWAV(imagePath);
+                        ProcessWAV(filePath);
+
+                        SetInstrument(filePath);
+
+                        //var ext = System.IO.Path.GetExtension(filePath);
+                        //var noteName = System.IO.Path.GetFileNameWithoutExtension(filePath);
+                        //_currentNote = _instrument.Notes.Where(n => n.Name == noteName).FirstOrDefault();
+
+                        if (_currentNote != null)
+                            _currentNote.Length = _length;
+
+                        DisplayNoteLines();
                     }
                     else
                     {
-                        MessageBox.Show("Please drop a valid image file.");
+                        MessageBox.Show("Please drop a valid sound file.");
                     }
                 }
             }
@@ -86,6 +144,7 @@ namespace SpectrogramTool.Wpf
         private List<Complex32[]> _complex;
         private float _maxAmplitude = 0.0f;
         private float[,] _magnitudeGrid;
+        private float _length;
         private void ProcessWAV(string filePath)
         {
             try
@@ -109,7 +168,15 @@ namespace SpectrogramTool.Wpf
 
                 _maxAmplitude = _complex.Max(a => a.Max(v => v.Magnitude));
 
+                _length = (float)samples.Length / (float)_sampleRate;
+                //var envelopes = SpectrogramProcessor.ExtractEnvelopes(_magnitudeGrid, (float)samples.Length / (float)_sampleRate);
+
+                //var name = System.IO.Path.GetDirectoryName(filePath) + System.IO.Path.DirectorySeparatorChar + (System.IO.Path.GetFileNameWithoutExtension(filePath) ?? "") + ".csv";
+                //SaveEnvelopes(envelopes, name);
+
                 ApplyBitmap(bitmap);
+
+                _wavefilePath = filePath;
             }
             catch (Exception ex)
             {
@@ -117,9 +184,51 @@ namespace SpectrogramTool.Wpf
             }
         }
 
+        private void SetInstrument(string path)
+        {
+            var name = System.IO.Path.GetFileNameWithoutExtension(path);
+            var root = System.IO.Path.GetDirectoryName(path);
+            var configFiles = Directory.GetFiles(root, "*.config");
+            if (!configFiles.Any())
+            {
+                _instrument = null;
+                _currentNote = null;
+                _instrumentConfigPath = null;
+            }
+
+            foreach (string file in configFiles)
+            {
+                if (_instrumentConfigPath?.ToLower() == file)
+                    return;
+
+                var instrument = LoadInstrumentConfig(file);
+                var note = instrument.Notes.FirstOrDefault(n => n.Name == name);
+                if (note != null)
+                {
+                    if (_instrumentConfigPath?.ToLower() == file)
+                        return;
+
+                    _instrumentConfigPath = file;
+                    _instrument = instrument;
+                    _currentNote = note;
+                    return;
+                }
+            }
+
+            _instrument = LoadInstrumentConfig(configFiles.First());
+            _currentNote = _instrument.Notes.FirstOrDefault(n => n.Name == name);
+        }
+
+        private static void SaveEnvelopes(IEnumerable<Envelope> envelopes, string filePath)
+        {
+            string jsonString = JsonSerializer.Serialize(envelopes);
+            File.WriteAllText(filePath, jsonString);
+        }
+
         public static Int16[] GenerateSineWave(double frequency, int sampleRate, float amplitude = 1.0f)
         {
             var numSamples = (int)((1.0 / frequency) * sampleRate * 100.0) + 1;
+            numSamples += 100;
             var buffer = new short[numSamples];
             for (int i = 0; i < buffer.Length; i++)
             {
@@ -137,7 +246,7 @@ namespace SpectrogramTool.Wpf
         {
             try
             {
-                var samples = GenerateSineWave(1000, 44100);
+                var samples = GenerateSineWave(989, 44100);
                 _sampleRate = 44100;
 
                 var floatSamples = Array.ConvertAll(samples, s => (float)s / (float)short.MaxValue);
@@ -146,6 +255,11 @@ namespace SpectrogramTool.Wpf
                 //_magnitudeGrid = SpectrogramProcessor.ProcessToLogMagnitudes(_complex);
                 _magnitudeGrid = SpectrogramProcessor.ProcessToMagnitudes(_complex);
                 var bitmap = SpectrogramProcessor.RenderToBitmap(_magnitudeGrid);
+
+                var envelopes = SpectrogramProcessor.ExtractEnvelopes(_magnitudeGrid, (float)samples.Length / (float)_sampleRate);
+                var filePath = "c:\\projects\\sounds\\sin.csv";
+                var name = System.IO.Path.GetDirectoryName(filePath) + System.IO.Path.DirectorySeparatorChar + (System.IO.Path.GetFileNameWithoutExtension(filePath) ?? "") + ".csv";
+                SaveEnvelopes(envelopes, name);
 
                 _maxAmplitude = _complex.Max(a => a.Max(v => v.Magnitude));
 
@@ -201,6 +315,7 @@ namespace SpectrogramTool.Wpf
 
                 myImage.Visibility = Visibility.Visible;
                 canvas.Visibility = Visibility.Visible;
+                noteCanvas.Visibility = Visibility.Visible;
                 message.Visibility = Visibility.Collapsed;
             }
             finally
@@ -208,6 +323,11 @@ namespace SpectrogramTool.Wpf
                 // 5. Clean up memory to avoid leaks
                 DeleteObject(hBitmap);
             }
+        }
+
+        private void noteCanvas_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            DisplayNoteLines();
         }
 
         private void canvas_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -233,7 +353,7 @@ namespace SpectrogramTool.Wpf
             canvas.Background = new SolidColorBrush(System.Windows.Media.Color.FromRgb(255, 0, 0));
             this.Title = "";
 
-            canvas.Children.Remove(lines);
+            canvas.Children.Remove(envelopeLines);
         }
 
         private void image_MouseMove(object sender, MouseEventArgs e)
@@ -252,10 +372,58 @@ namespace SpectrogramTool.Wpf
             // Get the precise X and Y coordinates relative to the Canvas
             var mousePosition = e.GetPosition(myImage);
             LogDetails(mousePosition);
+
+            AddFrequency(mousePosition);
+            DisplayNoteLines();
+        }
+
+        private void myImage_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            // Get the precise X and Y coordinates relative to the Canvas
+            var mousePosition = e.GetPosition(myImage);
+            
+            RemoveFrequency(mousePosition);
+            DisplayNoteLines();
+        }
+
+        private List<Line>? noteLines = new List<Line>();
+        private void DisplayNoteLines()
+        {
+            if (noteLines.Any())
+            {
+                foreach (var line in noteLines)
+                    noteCanvas.Children.Remove(line);
+                noteLines.Clear();
+            }
+
+            if (_magnitudeGrid == null || _currentNote == null || !_currentNote.Frequencies.Any())
+                return;
+
+            var numBuckets = _magnitudeGrid.GetLength(1);
+            var freqStep = (_sampleRate / 2) / numBuckets;
+            var step = noteCanvas.ActualHeight / numBuckets;
+
+            foreach (var freq in _currentNote.Frequencies)
+            {
+                var row = noteCanvas.ActualHeight - (step * freq.Index);
+                var line = new Line
+                {
+                    X1 = 0,
+                    Y1 = row,
+                    X2 = noteCanvas.ActualWidth,
+                    Y2 = row,
+                    Stroke = System.Windows.Media.Brushes.Yellow,
+                    Opacity = 0.7,
+                    StrokeThickness = 2
+                };
+
+                noteLines.Add(line);
+                noteCanvas.Children.Add(line);
+            }
         }
 
         private int _sampleRate = 44100;
-        private Polyline? lines { get; set; }
+        private Polyline? envelopeLines { get; set; }
         private void DisplayDetails(System.Windows.Point mousePos)
         {
             var percentX = (double)mousePos.X / (double)myImage.ActualWidth;
@@ -263,10 +431,10 @@ namespace SpectrogramTool.Wpf
 
             var canvasWidth = canvas.Width;
 
-            if (lines != null)
+            if (envelopeLines != null)
             {
-                canvas.Children.Remove(lines);
-                lines = null; 
+                canvas.Children.Remove(envelopeLines);
+                envelopeLines = null; 
             }
 
             if (_magnitudeGrid == null)
@@ -283,11 +451,11 @@ namespace SpectrogramTool.Wpf
 
             //***
             // 1. Create a new Polyline instance
-            lines = new Polyline();
+            envelopeLines = new Polyline();
 
             // 2. Set the visual properties
-            lines.Stroke = System.Windows.Media.Brushes.Black;
-            lines.StrokeThickness = 2;
+            envelopeLines.Stroke = System.Windows.Media.Brushes.Black;
+            envelopeLines.StrokeThickness = 2;
 
             var step = canvas.Width / (_magnitudeGrid.GetLength(0)-1);
 
@@ -295,12 +463,61 @@ namespace SpectrogramTool.Wpf
             for (int i = 0; i < _magnitudeGrid.GetLength(0); i++)
             {
                 // 3. Create and add your points (X, Y)
-                lines.Points.Add(new System.Windows.Point(step*i, (1.0- (_complex[i][row].Magnitude/_maxAmplitude))*canvas.Height));  
+                envelopeLines.Points.Add(new System.Windows.Point(step*i, (1.0- (_complex[i][row].Magnitude/_maxAmplitude))*canvas.Height));  
             }
 
             // 4. Add the polyline to your Canvas
-            canvas.Children.Add(lines);
+            canvas.Children.Add(envelopeLines);
             //***
+        }
+        private void RemoveFrequency(System.Windows.Point mousePos)
+        {
+            if (_currentNote == null)
+                return;
+
+            var percentX = (double)mousePos.X / (double)myImage.ActualWidth;
+            var percentY = ((double)mousePos.Y / (double)myImage.ActualHeight);
+
+            var canvasWidth = canvas.Width;
+
+            if (_magnitudeGrid == null)
+                return;
+
+            var row = (int)((1.0 - percentY) * (_magnitudeGrid.GetLength(1) - 1.0));
+
+            var freq = _currentNote.Frequencies.FirstOrDefault(f => f.Index == row);
+            if (freq != null)
+                _currentNote.Frequencies.Remove(freq);
+        }
+
+        private void AddFrequency(System.Windows.Point mousePos)
+        {
+            if (_currentNote == null)
+                return;
+
+            var percentX = (double)mousePos.X / (double)myImage.ActualWidth;
+            var percentY = ((double)mousePos.Y / (double)myImage.ActualHeight);
+
+            var canvasWidth = canvas.Width;
+
+            if (_magnitudeGrid == null)
+                return;
+
+            var column = (int)(percentX * (_magnitudeGrid.GetLength(0) - 1.0));
+            var row = (int)((1.0 - percentY) * (_magnitudeGrid.GetLength(1) - 1.0));
+
+            if (!_currentNote.Frequencies.Any(f => f.Index == row))
+            {
+                var numBuckets = _magnitudeGrid.GetLength(1);
+                var freqStep = (_sampleRate / 2) / numBuckets;
+                var frequency = row * freqStep;
+
+                _currentNote.Frequencies.Add(new Frequency
+                {
+                    Index = row,
+                    Value = frequency
+                });
+            }
         }
 
         private void LogDetails(System.Windows.Point mousePos)
