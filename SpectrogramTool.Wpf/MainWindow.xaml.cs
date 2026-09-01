@@ -1,8 +1,6 @@
 ﻿using MathNet.Numerics;
 using Spectrogram;
-using System;
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 using System.Drawing;
 using System.IO;
 using System.Text.Json;
@@ -12,7 +10,6 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
-using System.Xml.Linq;
 using static Spectrogram.SpectrogramProcessor;
 
 namespace SpectrogramTool.Wpf
@@ -23,12 +20,14 @@ namespace SpectrogramTool.Wpf
     public partial class MainWindow : System.Windows.Window
     {
         private Instrument _instrument;
-        private Note _currentNote;
+        private NoteConfig _currentNote;
 
         private string _wavefilePath;
         private string _instrumentConfigPath;
 
         private static FileSystemWatcher _fileWatcher;
+
+        private bool _snapToWesternNotation = true;
 
         public MainWindow()
         {
@@ -63,11 +62,27 @@ namespace SpectrogramTool.Wpf
             if (_currentNote == null || !_currentNote.Frequencies.Any())
                 return;
 
-            var envelopes = SpectrogramProcessor.ExtractEnvelopes(_magnitudeGrid, _currentNote.Frequencies.Select(f => new Tuple<int, float> (f.Index, f.Value)).ToList(), _currentNote.Length);
+            var envelopes = _currentNote.Frequencies.Select(f => new Envelope
+            {
+                Length = _currentNote.Length,
+                Amplitudes = _magnitudeGrid.GetRow(f.Index),
+                Frequency = f.Freq,
+                FundamentalMult = f.FundamentalMult
+            }).ToList();
+
+            var sound = new EnvelopeSound
+            {
+                NoteIndex = (int?)_currentNote.NoteIndex,
+                Octave = _currentNote.Octave,
+                Envelopes = envelopes,
+            };
+
             var root = System.IO.Path.GetDirectoryName(_wavefilePath);
 
             var filePath = $"{root}\\{_currentNote.Name}.snd";
-            SaveEnvelopes(envelopes, filePath);
+
+            jsonString = JsonSerializer.Serialize(sound);
+            File.WriteAllText(filePath, jsonString);
         }
 
         private Instrument LoadInstrumentConfig(string filePath)
@@ -129,7 +144,14 @@ namespace SpectrogramTool.Wpf
                         SetInstrument(filePath);
 
                         if (_currentNote != null)
+                        {
                             _currentNote.Length = _length;
+
+                            string name = System.IO.Path.GetFileNameWithoutExtension(filePath) ?? string.Empty;
+                            var index = name.ToWesternNoteIndex();
+                            _currentNote.NoteIndex = index?.Item1;
+                            _currentNote.Octave = index?.Item2;
+                        }
 
                         DisplayNoteLines();
                     }
@@ -261,12 +283,6 @@ namespace SpectrogramTool.Wpf
             });
         }
 
-        private static void SaveEnvelopes(IEnumerable<Envelope> envelopes, string filePath)
-        {
-            string jsonString = JsonSerializer.Serialize(envelopes);
-            File.WriteAllText(filePath, jsonString);
-        }
-
         public static Int16[] GenerateSineWave(double frequency, int sampleRate, float amplitude = 1.0f)
         {
             var numSamples = (int)((1.0 / frequency) * sampleRate * 100.0) + 1;
@@ -297,11 +313,6 @@ namespace SpectrogramTool.Wpf
                 //_magnitudeGrid = SpectrogramProcessor.ProcessToLogMagnitudes(_complex);
                 _magnitudeGrid = SpectrogramProcessor.ProcessToMagnitudes(_complex);
                 var bitmap = SpectrogramProcessor.RenderToBitmap(_magnitudeGrid);
-
-                var envelopes = SpectrogramProcessor.ExtractEnvelopes(_magnitudeGrid, (float)samples.Length / (float)_sampleRate);
-                var filePath = "c:\\projects\\sounds\\sin.csv";
-                var name = System.IO.Path.GetDirectoryName(filePath) + System.IO.Path.DirectorySeparatorChar + (System.IO.Path.GetFileNameWithoutExtension(filePath) ?? "") + ".csv";
-                SaveEnvelopes(envelopes, name);
 
                 _maxAmplitude = _complex.Max(a => a.Max(v => v.Magnitude));
 
@@ -553,11 +564,16 @@ namespace SpectrogramTool.Wpf
                 var numBuckets = _magnitudeGrid.GetLength(1);
                 var freqStep = (_sampleRate / 2) / numBuckets;
                 var frequency = row * freqStep;
+                int? fundamentalMult = null;
+
+                if (_currentNote.NoteIndex != null)
+                    fundamentalMult = WesternNotation.GetFundamentalMult(frequency, _currentNote.NoteIndex.Value, _currentNote.Octave.Value, WesternNotation.Pitch.Stuttgart);
 
                 _currentNote.Frequencies.Add(new Frequency
                 {
                     Index = row,
-                    Value = frequency
+                    Freq = frequency,
+                    FundamentalMult = fundamentalMult
                 });
 
                 _currentNote.Frequencies = _currentNote.Frequencies.OrderBy(f => f.Index).ToList();
@@ -594,7 +610,7 @@ namespace SpectrogramTool.Wpf
             Debug.WriteLine($"freq:{frequency}, envelope:{message}");
         }
 
-        private AudioSamples LoadWavSamples(string filename)
+        private WAVSamples LoadWavSamples(string filename)
         {
             var wavPath = System.IO.Path.Combine(Directory.GetCurrentDirectory(), filename);
             var wavFile = File.ReadAllBytes(wavPath);
@@ -605,7 +621,7 @@ namespace SpectrogramTool.Wpf
             var samples = new byte[wavFile.Length - 44];
             Array.Copy(wavFile, 44, samples, 0, samples.Length);
 
-            return new AudioSamples
+            return new WAVSamples
             {
                 Samples = samples,
                 Channels = BitConverter.ToInt16(wavFile, 22),

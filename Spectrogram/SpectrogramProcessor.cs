@@ -95,66 +95,6 @@ namespace Spectrogram
             return grid;
         }
 
-        public class Envelope
-        {
-            public float Frequency { get; set; }
-            public float Index { get; set; }
-            public float Length { get; set; }
-            public float[] Amplitudes { get; set; }
-
-            public new string ToString()
-            {
-                return $"Index: {Index}, Frequency: {Frequency}, MaxAmplitude: {Amplitudes.Max()}";
-            }
-        }
-
-        public static IEnumerable<Envelope> ExtractEnvelopes(float[,] magnitudeGrid, IEnumerable<Tuple<int, float>> indices, float length)
-        {
-            int timeSlots = magnitudeGrid.GetLength(0);
-            // We only need the first half (up to Nyquist frequency) because real signals are symmetric
-            int freqBins = magnitudeGrid.GetLength(1);
-
-            var sampleRate = 44100;
-            var numBuckets = magnitudeGrid.GetLength(1);
-            var freqStep = (sampleRate / 2) / numBuckets;
-
-            var envelopes = new List<Envelope>();
-            foreach (var index in indices)
-            {
-                var row = Enumerable.Range(0, magnitudeGrid.GetLength(0))
-                         .Select(t => magnitudeGrid[t, index.Item1]).ToArray();
-
-                envelopes.Add(new Envelope { Index = index.Item1, Frequency = index.Item2, Amplitudes = row, Length = length });
-            }
-
-            return envelopes;
-        }
-        
-        public static IEnumerable<Envelope> ExtractEnvelopes(float[,] magnitudeGrid, float length)
-        {
-            int timeSlots = magnitudeGrid.GetLength(0);
-            // We only need the first half (up to Nyquist frequency) because real signals are symmetric
-            int freqBins = magnitudeGrid.GetLength(1);
-
-            var sampleRate = 44100;
-            var numBuckets = magnitudeGrid.GetLength(1);
-            var freqStep = (sampleRate / 2) / numBuckets;
-
-            var envelopes = new List<Envelope>();
-            for (int f = 0; f < freqBins; f++)
-            {
-                var row = Enumerable.Range(0, magnitudeGrid.GetLength(0))
-                         .Select(t => magnitudeGrid[t, f]).ToArray();
-
-                var max = row.Max();
-                //if (max > 0.2)
-                if (f == 6 || f == 18 || f == 30)
-                    envelopes.Add(new Envelope { Index = f, Frequency = f * freqStep, Amplitudes = row, Length = length });
-            }
-
-            return envelopes;
-        }
-
         public static Bitmap CreateBitmapFromGrid(float[,] magnitudeGrid)
         {
             int width = magnitudeGrid.GetLength(0);  // Time axis

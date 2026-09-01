@@ -1,6 +1,6 @@
 ﻿namespace SpectrogramTool.Wpf
 {
-    public class AudioSamples
+    public class WAVSamples
     {
         public byte[] Samples { get; set;} 
         public int Channels { get; set;}
