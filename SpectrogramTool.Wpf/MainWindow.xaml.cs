@@ -27,13 +27,9 @@ namespace SpectrogramTool.Wpf
 
         private static FileSystemWatcher _fileWatcher;
 
-        private bool _snapToWesternNotation = true;
-
         public MainWindow()
         {
             InitializeComponent();
-
-            //_instrument = LoadInstrumentConfig(_instrumentConfigPath);
 
             //RenderFromByteArray();
             ProcessSin();
